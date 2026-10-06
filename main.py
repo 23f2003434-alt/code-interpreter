@@ -1,4 +1,5 @@
 import os
+import re
 import traceback
 from io import StringIO
 import sys
@@ -35,6 +36,7 @@ def execute_python_code(code: str) -> dict:
     try:
         exec(code, {})
         output = sys.stdout.getvalue()
+
         return {
             "success": True,
             "output": output
@@ -42,6 +44,7 @@ def execute_python_code(code: str) -> dict:
 
     except Exception:
         output = traceback.format_exc()
+
         return {
             "success": False,
             "output": output
@@ -52,26 +55,28 @@ def execute_python_code(code: str) -> dict:
 
 
 def analyze_error_with_ai(code: str, error_traceback: str) -> list[int]:
+
     client = OpenAI(
         api_key=os.environ["AIPIPE_TOKEN"],
         base_url="https://aipipe.org/openai/v1"
     )
 
     prompt = f"""
-Analyze the following Python code and traceback.
+Analyze the Python USER CODE and its traceback.
 
-Identify the exact line number(s) in the USER CODE where the error occurred.
-Do NOT use line numbers from main.py or from the traceback.
+The line numbers must refer ONLY to the USER CODE.
 The first line of USER CODE is line 1.
 
-CODE:
+USER CODE:
 {code}
 
 TRACEBACK:
 {error_traceback}
 
+Identify the exact line number(s) in the USER CODE that caused the error.
+
 Return ONLY JSON in this format:
-{{"error_lines": [3]}}
+{{"error_lines": [1]}}
 """
 
     response = client.chat.completions.create(
@@ -85,15 +90,27 @@ Return ONLY JSON in this format:
         response_format={"type": "json_object"}
     )
 
+    # Validate the AI structured response.
     result = ErrorAnalysis.model_validate_json(
         response.choices[0].message.content
     )
 
+    # Get the exact line number from Python's traceback.
+    matches = re.findall(
+        r'File "<string>", line (\d+)',
+        error_traceback
+    )
+
+    if matches:
+        return sorted(set(int(line) for line in matches))
+
+    # Fallback to the AI result.
     return result.error_lines
 
 
 @app.post("/code-interpreter")
 def code_interpreter(request: CodeRequest):
+
     execution = execute_python_code(request.code)
 
     if execution["success"]:
